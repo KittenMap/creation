@@ -513,7 +513,7 @@
   .tag-purple{background:#f3ebff;color:#6340a8}
   .tag-gray{background:#f1f3f6;color:#4a5058}
 
-  /* ============ 音乐卡（颜色统一由 --music-theme-color 控制） ============ */
+  /* 音乐卡 */
   .music-player{
     display:flex;height:100%;min-height:0;width:100%;
     position:relative;padding:10px;gap:8px;
@@ -585,7 +585,6 @@
     flex:1;height:4px;border-radius:2px;background:#e8eaee;
     position:relative;cursor:pointer;overflow:hidden;min-width:30px;
   }
-  /* 关键：进度填充色跟随主题色 */
   .mp-progress-fill{
     position:absolute;left:0;top:0;bottom:0;
     background:var(--music-theme-color, #2f6fed);
@@ -607,7 +606,6 @@
   }
   .mp-vol-btn:hover{background:#f1f3f6;color:#4a5058}
   .mp-vol-btn svg{width:13px;height:13px;pointer-events:none}
-  /* 音量滑块：thumb 颜色跟随主题；填充用 JS 设置 background */
   .mp-vol-slider{
     -webkit-appearance:none;appearance:none;
     width:56px;height:4px;border-radius:2px;
@@ -640,7 +638,6 @@
     display:grid;place-items:center;transition:.15s;flex:none;
   }
   .mp-btn:hover{background:#e6e9ee}
-  /* 关键：播放按钮背景跟随主题色 */
   .mp-btn.main{
     width:38px;height:38px;
     background:var(--music-theme-color, #2f6fed);
@@ -1235,9 +1232,8 @@
   function el(tag, cls) { var e = document.createElement(tag); if (cls) e.className = cls; return e; }
   function stripTags(html) { var d = document.createElement('div'); d.innerHTML = html || ''; return (d.textContent || '').trim(); }
 
-  var LS_KEY = 'creation-home-v17';
+  var LS_KEY = 'creation-home-v18';
 
-  /* ============ 音频进度安全计算 ============ */
   function safePct(cur, dur) {
     var c = Number(cur);
     var d = Number(dur);
@@ -1247,6 +1243,7 @@
     if (!isFinite(pct) || pct < 0) return 0;
     return Math.min(100, pct);
   }
+  
   function formatTime(s) {
     var n = Number(s);
     if (!isFinite(n) || n < 0) return '0:00';
@@ -1255,7 +1252,6 @@
     return m + ':' + (sec < 10 ? '0' : '') + sec;
   }
 
-  /* 音量滑块填充 */
   function updateVolumeSliderFill(slider) {
     if (!slider) return;
     var card = slider.closest ? slider.closest('.card') : null;
@@ -1299,7 +1295,12 @@
   var editingCardId = null;
   var selectedStickerId = null;
   var audio = document.getElementById('audioPlayer');
+  
+  /* 核心修复：锁定时长机制 */
   var audioMetaLoaded = false;
+  var lockedDuration = 0; 
+  var lastTimeupdateCurrent = 0;
+  var isAudioSeeking = false;
 
   function loadState() {
     try {
@@ -1574,7 +1575,6 @@
     card.dataset.id = c.id;
     card.dataset.type = c.type;
     card.style.setProperty('--card-bg', c.bg || '#ffffff');
-    /* 关键：音乐主题色挂在 card 上，供 .mp-btn.main / .mp-progress-fill / .mp-vol-slider 共享 */
     if (c.type === 'music') {
       card.style.setProperty('--music-theme-color', c.playColor || '#2f6fed');
     }
@@ -1759,6 +1759,45 @@
     return body;
   }
 
+  /* ---------- 修复：补全 Q&A 卡片相关函数 ---------- */
+  function buildQAEditor(c) {
+    var wrap = el('div', 'qa-thread');
+    if (!c.pairs.length) {
+      var empty = el('p', 'qa-empty');
+      empty.textContent = '还没有问答，点击面板中的「+ 添加一组问答」';
+      wrap.appendChild(empty);
+    }
+    c.pairs.forEach(function (pair, i) {
+      var item = el('div', 'qa-pair'); item.dataset.i = i;
+      var q = el('div', 'qa-bubble q'); q.dataset.field = 'q'; q.dataset.ph = '问题';
+      q.contentEditable = 'true'; q.innerHTML = pair.q || '';
+      var a = el('div', 'qa-bubble a'); a.dataset.field = 'a'; a.dataset.ph = '回答';
+      a.contentEditable = 'true'; a.innerHTML = pair.a || '';
+      var rm = el('button', 'qa-rm'); rm.type = 'button'; rm.title = '删除这组问答'; rm.innerHTML = ICON.x;
+      rm.addEventListener('click', function () { c.pairs.splice(i, 1); save(); render(); });
+      item.appendChild(q); item.appendChild(a); item.appendChild(rm);
+      wrap.appendChild(item);
+    });
+    return wrap;
+  }
+
+  function buildQAPreview(c) {
+    var holder = el('div'); holder.style.position = 'relative';
+    if (!c.pairs.length) {
+      var empty = el('p', 'qa-empty'); empty.textContent = '暂无问答';
+      holder.appendChild(empty); return holder;
+    }
+    var wrap = el('div', 'qa-thread');
+    c.pairs.slice(0, 2).forEach(function (p) {
+      var q = el('div', 'qa-bubble q'); q.innerHTML = p.q || '（未填写问题）';
+      var a = el('div', 'qa-bubble a'); a.innerHTML = p.a || '（未填写回答）';
+      wrap.appendChild(q); wrap.appendChild(a);
+    });
+    holder.appendChild(wrap);
+    holder.appendChild(el('div', 'fade-bottom'));
+    return holder;
+  }
+
   function buildRelation(c) {
     var wrap = el('div', 'relation-card');
     wrap.appendChild(buildRelationSide(c, 'left'));
@@ -1941,7 +1980,6 @@
     return wrap;
   }
 
-  /* ============ 音量控件 ============ */
   function buildVolumeControl() {
     var wrap = el('div', 'mp-volume');
 
@@ -1969,7 +2007,6 @@
     slider.value = String(state.muted ? 0 : state.volume);
     slider.title = '音量';
 
-    /* 初始化填充背景 */
     updateVolumeSliderFill(slider);
 
     function onSliderInput(e) {
@@ -2003,7 +2040,6 @@
     return wrap;
   }
 
-  /* ============ 音乐卡 ============ */
   function buildMusicPlayer(c) {
     var wrap = el('div', 'music-player');
     wrap.dataset.musicId = c.id;
@@ -2082,19 +2118,25 @@
     nextBtn.addEventListener('click', function (e) { e.stopPropagation(); playNext(true); });
     modeBtn.addEventListener('click', function (e) { e.stopPropagation(); cyclePlayMode(); });
     playlistBtn.addEventListener('click', function (e) { e.stopPropagation(); openPlaylistModal(); });
+    
     bar.addEventListener('click', function (e) {
       e.stopPropagation();
-      if (!audio.duration || !isFinite(audio.duration) || audio.duration <= 0) return;
+      /* 修复：严格的进度条点击防穿透和保护 */
+      if (!audioMetaLoaded) return;
+      if (!audio.seekable || !audio.seekable.length) return;
       var rect = bar.getBoundingClientRect();
+      if (rect.width < 1) return;
       var pct = (e.clientX - rect.left) / rect.width;
       pct = Math.max(0, Math.min(1, pct));
-      audio.currentTime = pct * audio.duration;
+      var targetTime = pct * lockedDuration;
+      if (targetTime >= 0 && targetTime <= audio.seekable.end(0)) {
+        audio.currentTime = targetTime;
+      }
     });
 
     return wrap;
   }
 
-  /* 更新音乐卡 UI（不重绘整页，只更新子元素 style/textContent） */
   function updateMusicUI() {
     var cards = grid.querySelectorAll('[data-type="music"]');
     cards.forEach(function (card) {
@@ -2158,13 +2200,13 @@
         updateVolumeSliderFill(s);
       });
 
-      /* 关键：使用 safePct；元数据未加载完成时强制 0% */
+      /* 核心修复：使用 lockedDuration 确保进度条不因网络波动瞬间满格 */
       var cur = audioMetaLoaded ? audio.currentTime : 0;
-      var dur = audioMetaLoaded ? audio.duration : 0;
+      var dur = lockedDuration || (audioMetaLoaded ? audio.duration : 0);
       var pct = safePct(cur, dur);
       if (fill) fill.style.width = pct + '%';
       if (curTimeEl) curTimeEl.textContent = audioMetaLoaded ? formatTime(audio.currentTime) : '0:00';
-      if (durTimeEl) durTimeEl.textContent = audioMetaLoaded ? formatTime(audio.duration) : '0:00';
+      if (durTimeEl) durTimeEl.textContent = audioMetaLoaded ? formatTime(dur) : '0:00';
     });
   }
 
@@ -2215,7 +2257,13 @@
     save();
     clearMusicError();
     applyAudioVolume();
+    
+    /* 重置锁定时长机制 */
     audioMetaLoaded = false;
+    lockedDuration = 0;
+    lastTimeupdateCurrent = 0;
+    isAudioSeeking = false;
+
     if (track.audioUrl) {
       audio.src = track.audioUrl;
       audio.removeAttribute('crossorigin');
@@ -2226,7 +2274,7 @@
           p.catch(function (err) {
             console.error('[Audio Play Error]', err.name, err.message);
             if (err.name === 'NotAllowedError') showMusicError('需要先点击页面才能播放音频');
-            else if (err.name === 'NotSupportedError') showMusicError('音频格式不支持，请尝试 MP3 或 OGG');
+            else if (err.name === 'NotSupportedError') showMusicError('音频链接无效或格式不支持');
             else showMusicError('播放失败：' + (err.message || err.name));
           });
         }
@@ -2259,7 +2307,7 @@
         p.catch(function (err) {
           console.error('[Audio Play Error]', err.name, err.message);
           if (err.name === 'NotAllowedError') showMusicError('播放被浏览器阻止，请再点一次');
-          else if (err.name === 'NotSupportedError') showMusicError('音频格式不支持或链接无效');
+          else if (err.name === 'NotSupportedError') showMusicError('音频链接无效或格式不支持');
           else if (err.name === 'NetworkError') showMusicError('网络错误，音频加载失败');
           else showMusicError('播放失败：' + (err.message || err.name));
         });
@@ -2311,32 +2359,45 @@
     toast(names[state.playMode] || '');
   }
 
-  /* ============ 音频事件 ============ */
-  /* 关键修复：元数据加载完成前强制进度条为 0%，避免 NaN/Infinity 导致跳变 */
+  /* ============ 音频事件（防断流核心修复） ============ */
+  
   audio.addEventListener('loadedmetadata', function () {
     audioMetaLoaded = true;
-    updateMusicUI();
-  });
-  audio.addEventListener('durationchange', function () {
-    if (isFinite(audio.duration) && audio.duration > 0) {
-      audioMetaLoaded = true;
+    if (lockedDuration === 0 && isFinite(audio.duration) && audio.duration > 0) {
+      lockedDuration = audio.duration; /* 锁定首次真实时长 */
     }
     updateMusicUI();
   });
-  audio.addEventListener('emptied', function () {
-    audioMetaLoaded = false;
-    /* 直接刷新进度条为 0% */
-    grid.querySelectorAll('[data-type="music"] .mp-progress-fill').forEach(function (f) { f.style.width = '0%'; });
-    grid.querySelectorAll('[data-type="music"] .mp-time-cur').forEach(function (el) { el.textContent = '0:00'; });
-    grid.querySelectorAll('[data-type="music"] .mp-time-dur').forEach(function (el) { el.textContent = '0:00'; });
+
+  audio.addEventListener('durationchange', function () {
+    /* 允许首次获取到 duration 时锁定 */
+    if (lockedDuration === 0 && isFinite(audio.duration) && audio.duration > 0) {
+      lockedDuration = audio.duration;
+    }
+    /* 如果浏览器试图把时长改小（例如网络中断只拿到6秒），直接忽略，不更新UI */
+    updateMusicUI();
   });
 
-  /* 关键：只用 safePct 计算，只更新 style，不触发整页重绘 */
   audio.addEventListener('timeupdate', function () {
-    var pct = safePct(audio.currentTime, audio.duration);
+    /* 检测异常跳变（防断流或假结束） */
+    var cur = audio.currentTime;
+    if (lastTimeupdateCurrent > 0 && cur > lastTimeupdateCurrent + 5) {
+      // 单次 timeupdate 跳跃超过 5 秒，且不是用户主动点击进度条
+      if (!isAudioSeeking && audioMetaLoaded) {
+         audio.pause();
+         audio.currentTime = lastTimeupdateCurrent;
+         showMusicError('网络断开，播放中断');
+         return;
+      }
+    }
+    lastTimeupdateCurrent = cur;
+
+    var dur = lockedDuration || (audioMetaLoaded ? audio.duration : 0);
+    var pct = safePct(cur, dur);
     var pctStr = pct.toFixed(2) + '%';
-    var curStr = audioMetaLoaded ? formatTime(audio.currentTime) : '0:00';
-    var durStr = audioMetaLoaded ? formatTime(audio.duration) : '0:00';
+    var curStr = audioMetaLoaded ? formatTime(cur) : '0:00';
+    var durStr = audioMetaLoaded ? formatTime(dur) : '0:00';
+    
     var fills = grid.querySelectorAll('[data-type="music"] .mp-progress-fill');
     fills.forEach(function (f) { f.style.width = pctStr; });
     var curEls = grid.querySelectorAll('[data-type="music"] .mp-time-cur');
@@ -2345,6 +2406,9 @@
     durEls.forEach(function (el) { el.textContent = durStr; });
   });
 
+  audio.addEventListener('seeking', function () { isAudioSeeking = true; });
+  audio.addEventListener('seeked', function () { isAudioSeeking = false; });
+
   audio.addEventListener('error', function () {
     var e = audio.error;
     var msg = '音频加载失败';
@@ -2352,14 +2416,18 @@
       if (e.code === 1) msg = '音频加载被中断';
       else if (e.code === 2) msg = '网络错误，请检查音频链接';
       else if (e.code === 3) msg = '音频解码失败，文件可能损坏';
-      else if (e.code === 4) msg = '音频格式不支持或链接无效';
+      else if (e.code === 4) msg = '音频链接无效或格式不支持'; // NotSupportedError
     }
     console.error('[Audio Error]', e);
     showMusicError(msg);
+    updateMusicUI();
+  });
+
+  audio.addEventListener('stalled', function () {
+    showMusicError('网络不稳定，正在缓冲...');
   });
 
   audio.addEventListener('playing', function () { clearMusicError(); updateMusicUI(); });
-  audio.addEventListener('loadedmetadata', updateMusicUI);
   audio.addEventListener('play', function () { clearMusicError(); updateMusicUI(); });
   audio.addEventListener('pause', updateMusicUI);
 
@@ -2372,6 +2440,15 @@
   });
 
   audio.addEventListener('ended', function () {
+    /* 核心修复：拦截假 ended */
+    if (audioMetaLoaded && lockedDuration > 0 && Math.abs(audio.currentTime - lockedDuration) > 1.5) {
+      // 发现并未真正播完，说明是中途异常断流导致的提前触发
+      audio.pause();
+      audio.currentTime = lastTimeupdateCurrent;
+      showMusicError('加载中断，未能播放完毕');
+      return;
+    }
+
     if (state.playMode === 'loop-single') {
       audio.currentTime = 0;
       audio.play().catch(function () {});
@@ -3338,7 +3415,6 @@
     }
 
     if (c.type === 'music') {
-      /* 播放键颜色 — 关键：统一更新 --music-theme-color，同时同步进度条、音量滑块 */
       var playColorRow = el('div', 'prow');
       var playColorLabel = el('span', 'plabel'); playColorLabel.textContent = '主题色';
       playColorRow.appendChild(playColorLabel);
@@ -3347,9 +3423,7 @@
       playColorInput.value = c.playColor || '#2f6fed';
       playColorInput.addEventListener('input', function () {
         c.playColor = playColorInput.value;
-        /* 更新卡片的主题变量，进度条填充/播放按钮/滑块 thumb 全部同步 */
         card.style.setProperty('--music-theme-color', c.playColor);
-        /* 更新滑块渐变填充 */
         card.querySelectorAll('.mp-vol-slider').forEach(function (s) {
           updateVolumeSliderFill(s);
         });
@@ -3629,7 +3703,6 @@
     }
   });
 
-  /* ============ 启动 ============ */
   renderAddOptions();
   render();
   syncAppearanceUI();
